@@ -1,0 +1,258 @@
+---
+title: "Health and economic impacts of severe weather"
+author: "codith"
+date: "August 23, 2014"
+output: html_document
+---
+
+
+
+# Data processing
+
+## Initial setup.
+
+```{r setup}
+library(plyr)
+library(ggplot2)
+library(knitr)
+
+opts_chunk$set(cache=TRUE)
+
+setwd("~/coursera/repdata/RepData_PeerAssessment2")
+```
+
+## Download the file.
+```{r download_file}
+# Set up variables for downloading the file.
+fileURL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+filename <- "repdata%2Fdata%2FStormData.csv.bz2"
+
+# Download the file if necessary.
+if (!file.exists(filename)) {
+        download.file(fileURL, destfile = filename, method = "curl")
+        }
+
+```
+
+## Read in the data.
+
+```{r read_file, cache=TRUE}
+# Create the file handle.
+fh <- bzfile(filename)
+
+# Read in the data.
+if (!exists("storm_data_bk")) {
+        storm_data <- read.csv(fh)
+        storm_data_bk <- storm_data
+        } else storm_data <- storm_data_bk
+
+# Also download some documentation.
+doc1URL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf"
+doc1name <- "repdata%2Fpeer2_doc%2Fpd01016005curr.pdf"
+if (!file.exists(doc1name)) {
+        download.file(doc1URL, destfile = doc1name, method = "curl")
+        }
+
+faqURL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf"
+faqname <- "repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf"
+if (!file.exists(faqname)) {
+        download.file(faqURL, destfile = faqname, method = "curl")
+        }
+
+```
+
+We will also clean up the begin and end dates so that we can pick only more 
+recent (that is, better) records.
+```{r, cache=TRUE}
+storm_data$BGN_DATE <- as.Date(storm_data$BGN_DATE, format = "%m/%d/%Y")
+storm_data$BGN_DATE_YEAR <- format(storm_data$BGN_DATE, "%Y")
+storm_data$END_DATE <- as.Date(storm_data$END_DATE, format = "%m/%d/%Y")
+storm_data$END_DATE_YEAR <- format(storm_data$END_DATE, "%Y")
+```
+
+First, let's look at the type of information in this data set. We are most 
+interested in variables that can relate event types (`EVTYPE`) to economic or 
+health measures.
+
+```{r, cache=TRUE}
+names(storm_data)
+```
+
+The variables `FATALITIES` and `INJURIES` will be used for health outcomes. The 
+variables `PROPDMG` and `CROPDMG` will be used for economic outcomes. 
+
+# Data analysis
+
+## Health outcomes
+
+We need to select a cutoff for those numbers to classify weather events as having 
+a significant effect on health. First, we consider the distribution of events.
+
+```{r, cache=TRUE}
+summary(storm_data$INJURIES)
+summary(storm_data$FATALITIES)
+```
+
+Most events report neither injuries nor fatalities, so we will subset to just 
+those events that do to save on computational time. We will also summarize the 
+data by year.
+
+```{r, cache=TRUE}
+health_storm_data <- subset(storm_data, INJURIES > 0 | FATALITIES > 0)
+health_year <- ddply(storm_data, .(BGN_DATE_YEAR), summarize, 
+                     mean_INJURIES = mean(INJURIES), 
+                     total_INJURIES = sum(INJURIES), 
+                     mean_FATALITIES = mean(FATALITIES), 
+                     total_FATALITIES = sum(FATALITIES))
+```
+
+Let's look at some statistics and time graphs on injuries and fatalities with 
+these events. 
+
+```{r}
+quantile(health_storm_data$INJURIES, probs = c(0, 0.5, 0.9, 0.95, 1))
+quantile(health_storm_data$FATALITIES, probs = c(0, 0.5, 0.9, 0.95, 1))
+qplot(x = BGN_DATE_YEAR, y = total_FATALITIES, data = health_year) + 
+        theme(axis.text.x = element_text(angle = 90))
+qplot(x = BGN_DATE_YEAR, y = total_INJURIES, data = health_year) + 
+        theme(axis.text.x = element_text(angle = 90))
+```
+
+It seems like data collection got a lot better around 1995, so we will look only
+at events in 1995 or later.
+
+```{r, cache=TRUE}
+year_cutoff = "1995"
+health_storm_data <- subset(health_storm_data, BGN_DATE_YEAR >= year_cutoff)
+
+health_type <- ddply(storm_data, .(EVTYPE), summarize, 
+                     mean_INJURIES = mean(INJURIES), 
+                     total_INJURIES = sum(INJURIES), 
+                     mean_FATALITIES = mean(FATALITIES), 
+                     total_FATALITIES = sum(FATALITIES))
+```
+
+For planning purposes, both the frequency and likelihood of injuries or 
+fatalities from an event would be of interest.
+
+```{r}
+top_injuries <- as.character(health_type[with(health_type, 
+                                 order(-total_INJURIES)), ]$EVTYPE[1:10])
+mean_injuries <- as.character(health_type[with(health_type, 
+                                 order(-mean_INJURIES)), ]$EVTYPE[1:10])
+top_fatalities <- as.character(health_type[with(health_type, 
+                                 order(-total_FATALITIES)), ]$EVTYPE[1:10])
+mean_fatalities <- as.character(health_type[with(health_type, 
+                                 order(-mean_FATALITIES)), ]$EVTYPE[1:10])
+```
+
+The ten most-frequent causes of injuries and fatalities in 1995-2011 were:
+```{r}
+print(cbind(rank = seq(1:10), injuries = top_injuries, 
+            fatalities = top_fatalities))
+```
+
+The ten types of events most likely to cause injury or fatality in the same 
+time period were:
+```{r}
+print(cbind(rank = seq(1:10), injuries = mean_injuries, 
+            fatalities = mean_fatalities))
+```
+
+
+## Economic outcomes
+
+`PROPDMGEXP` and `CROPDMGEXP` are order-of-magnitude indicators. We will need to combine this information with the PROPDMG and CROPDMG colums, respectively. The actual value of property damage will be in the "property_damage" variable, and the actual value of crop damage will be in the "crop_damage" variable.
+
+The meaning of the other "EXP" column values is unclear and is not documented. A quick inspection of those events shows that they are mostly minor. The economic impact of those events will be ignored.
+
+```{r, cache=TRUE}
+storm_data$property_damage <- rep(NA, nrow(storm_data))
+storm_data$crop_damage <- rep(NA, nrow(storm_data))
+
+storm_data_prop_K <- storm_data$PROPDMGEXP == "K" | storm_data$PROPDMGEXP == "k"
+storm_data_prop_M <- storm_data$PROPDMGEXP == "M" | storm_data$PROPDMGEXP == "m"
+storm_data_prop_B <- storm_data$PROPDMGEXP == "B" | storm_data$PROPDMGEXP == "b"
+
+
+storm_data[storm_data_prop_K, ]$property_damage <- 
+        storm_data[storm_data_prop_K, ]$PROPDMG * 10^3
+storm_data[storm_data_prop_M, ]$property_damage <- 
+        storm_data[storm_data_prop_M, ]$PROPDMG * 10^6
+storm_data[storm_data_prop_B, ]$property_damage <- 
+        storm_data[storm_data_prop_B, ]$PROPDMG * 10^9
+
+
+storm_data_crop_K <- storm_data$CROPDMGEXP == "K" | storm_data$CROPDMGEXP == "k"
+storm_data_crop_M <- storm_data$CROPDMGEXP == "M" | storm_data$CROPDMGEXP == "m"
+storm_data_crop_B <- storm_data$CROPDMGEXP == "B" | storm_data$CROPDMGEXP == "b"
+
+
+storm_data[storm_data_crop_K, ]$crop_damage <- 
+        storm_data[storm_data_crop_K, ]$CROPDMG * 10^3
+storm_data[storm_data_crop_M, ]$crop_damage <- 
+        storm_data[storm_data_crop_M, ]$CROPDMG * 10^6
+storm_data[storm_data_crop_B, ]$crop_damage <- 
+        storm_data[storm_data_crop_B, ]$CROPDMG * 10^9
+
+econ_storm_data <- subset(storm_data, 
+                          !is.na(property_damage) | !is.na(crop_damage))
+
+```
+
+Similar to the treatment of the health data, let's look at the distribution of the economic effects of weather events.
+
+```{r}
+summary(econ_storm_data$property_damage)
+summary(econ_storm_data$crop_damage)
+```
+
+Similar to the health data, we summarize by event type and year.
+
+```{r, cache=TRUE}
+econ_year <- ddply(econ_storm_data, .(BGN_DATE_YEAR), summarize, 
+                     mean_property_damage = mean(property_damage, na.rm = TRUE), 
+                     total_property_damage = sum(property_damage, na.rm = TRUE), 
+                     mean_crop_damage = mean(crop_damage, na.rm = TRUE), 
+                     total_crop_damage = sum(crop_damage, na.rm = TRUE))
+```
+
+
+```{r}
+quantile(econ_storm_data$property_damage, probs = c(0, 0.5, 0.9, 0.95, 1), 
+         na.rm = TRUE)
+quantile(econ_storm_data$crop_damage, probs = c(0, 0.5, 0.9, 0.95, 1), 
+         na.rm = TRUE)
+qplot(x = BGN_DATE_YEAR, y = total_property_damage, data = econ_year) + 
+        theme(axis.text.x = element_text(angle = 90))
+qplot(x = BGN_DATE_YEAR, y = total_crop_damage, data = econ_year) + 
+        theme(axis.text.x = element_text(angle = 90))
+```
+
+It looks like good data collection on economic damage started in 1993, so we will look at only data 1993-2011. We will also summarize the data since then by event type.
+
+```{r}
+econ_year_cutoff <- "1993"
+econ_storm_data <- subset(econ_storm_data, BGN_DATE_YEAR >= econ_year_cutoff)
+
+econ_type <- ddply(econ_storm_data, .(EVTYPE), summarize, 
+                     total_property_damage = sum(property_damage, na.rm = TRUE), 
+                     total_crop_damage = sum(crop_damage, na.rm = TRUE))
+```
+
+For the economics data, total property and crop damages are the most useful.
+
+```{r}
+top_property <- as.character(econ_type[with(econ_type, 
+                                 order(-total_property_damage)), ]$EVTYPE[1:10])
+top_crop <- as.character(econ_type[with(econ_type, 
+                                 order(-total_crop_damage)), ]$EVTYPE[1:10])
+```
+
+The top causes (by total cost) of property and crop damage in 1993-2011 were:
+```{r}
+print(cbind(rank = seq(1:10), property = top_property, 
+            crop = top_crop))
+```
+
+# Conclusions
