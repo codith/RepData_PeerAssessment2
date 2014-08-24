@@ -1,27 +1,40 @@
 ---
-title: "Health and economic impacts of severe weather"
-author: "codith"
+title: "Rare, extreme weather events have the greatest human and economic costs"
+author: "Marcus Carr"
 date: "August 23, 2014"
 output: html_document
 ---
 
+# Synopsis
 
+Data from NOAA on injuries, fatalities, property damage, and crop damage due to inclement weather were analyzed. We most closely examined data in the years 1993-2011, which appeared to be the most complete. 
+
+The most common causes of injury or fatality were tornadoes, flooding, and excessive heat. The types of weather most likely to cause these involved high winds and extreme temperatures. Though more common types of weather, such as thunderstorms and snow, also caused many injuries and deaths, those events are much more frequent. Public health interventions would have the greatest effect if focused on rare, extreme weather events. 
+
+For property damage, the most damage is caused by water and high winds associated with floods and tropical weather systems. Crop damages are most often caused by drought and flooding. Measures against these types of damage are more difficult to implement.
 
 # Data processing
 
-## Initial setup.
+## Preliminaries.
+
+### Initial setup.
 
 ```{r setup}
 library(plyr)
 library(ggplot2)
+library(grid)
+library(gridExtra)
 library(knitr)
+library(stringr)
 
+# The data take a long time to read in. Comment out with caution.
 opts_chunk$set(cache=TRUE)
 
 setwd("~/coursera/repdata/RepData_PeerAssessment2")
 ```
 
-## Download the file.
+### Download the file.
+
 ```{r download_file}
 # Set up variables for downloading the file.
 fileURL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
@@ -34,17 +47,22 @@ if (!file.exists(filename)) {
 
 ```
 
-## Read in the data.
+### Read in the data. 
 
-```{r read_file, cache=TRUE}
+The EVTYPE field has extra whitespaces, which need to be removed.
+
+```{r read_file}
 # Create the file handle.
 fh <- bzfile(filename)
 
 # Read in the data.
 if (!exists("storm_data_bk")) {
-        storm_data <- read.csv(fh)
+        storm_data <- read.csv(fh, strip.white = TRUE)
         storm_data_bk <- storm_data
         } else storm_data <- storm_data_bk
+
+# Strip remaining whitespace from EVTYPE.
+storm_data$EVTYPE <- str_trim(storm_data$EVTYPE)
 
 # Also download some documentation.
 doc1URL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf"
@@ -61,25 +79,39 @@ if (!file.exists(faqname)) {
 
 ```
 
+
+## Data cleanup.
+
 We will also clean up the begin and end dates so that we can pick only more 
-recent (that is, better) records.
-```{r, cache=TRUE}
+recent (that is, better) records. Also the cases in EVTYPE need to be made consistant. There are some clear typos, but they are relatively rare. Most of the data are well-annotated.
+
+```{r}
 storm_data$BGN_DATE <- as.Date(storm_data$BGN_DATE, format = "%m/%d/%Y")
 storm_data$BGN_DATE_YEAR <- format(storm_data$BGN_DATE, "%Y")
 storm_data$END_DATE <- as.Date(storm_data$END_DATE, format = "%m/%d/%Y")
 storm_data$END_DATE_YEAR <- format(storm_data$END_DATE, "%Y")
+
+storm_data$EVTYPE <- as.factor(tolower(storm_data$EVTYPE))
 ```
+
+We will assume that the fine distinctions made in the `EVTYPE` variable are significant and retain them during our analysis. For example, a "flash flood" and a "river flood" would require different types of preparation.
+
+## Overview of the data.
 
 First, let's look at the type of information in this data set. We are most 
 interested in variables that can relate event types (`EVTYPE`) to economic or 
-health measures.
+health measures. We also want to see how most of the events are described.
 
-```{r, cache=TRUE}
+```{r}
 names(storm_data)
+sum_EVTYPE <- count(storm_data$EVTYPE)
+names(sum_EVTYPE) <- c("event", "freq")
+sum_EVTYPE <- sum_EVTYPE[order(-sum_EVTYPE$freq),]
 ```
 
 The variables `FATALITIES` and `INJURIES` will be used for health outcomes. The 
-variables `PROPDMG` and `CROPDMG` will be used for economic outcomes. 
+variables `PROPDMG` and `CROPDMG` will be used for economic outcomes. There are `r nrow(sum_EVTYPE)` descriptors among `r sum(sum_EVTYPE$freq)` events. That seems high, but we will focus on *likelihood* of injury or fatality with an event and on *total* economic damage, so it seems reasonable to ignore this for now.
+
 
 # Data analysis
 
@@ -88,17 +120,14 @@ variables `PROPDMG` and `CROPDMG` will be used for economic outcomes.
 We need to select a cutoff for those numbers to classify weather events as having 
 a significant effect on health. First, we consider the distribution of events.
 
-```{r, cache=TRUE}
+```{r}
 summary(storm_data$INJURIES)
 summary(storm_data$FATALITIES)
 ```
 
-Most events report neither injuries nor fatalities, so we will subset to just 
-those events that do to save on computational time. We will also summarize the 
-data by year.
+Most events report neither injuries nor fatalities, which is interesting. To start, we summarize the data by year.
 
-```{r, cache=TRUE}
-health_storm_data <- subset(storm_data, INJURIES > 0 | FATALITIES > 0)
+```{r}
 health_year <- ddply(storm_data, .(BGN_DATE_YEAR), summarize, 
                      mean_INJURIES = mean(INJURIES), 
                      total_INJURIES = sum(INJURIES), 
@@ -110,53 +139,54 @@ Let's look at some statistics and time graphs on injuries and fatalities with
 these events. 
 
 ```{r}
-quantile(health_storm_data$INJURIES, probs = c(0, 0.5, 0.9, 0.95, 1))
-quantile(health_storm_data$FATALITIES, probs = c(0, 0.5, 0.9, 0.95, 1))
-qplot(x = BGN_DATE_YEAR, y = total_FATALITIES, data = health_year) + 
+quantile(storm_data$INJURIES, probs = c(0, 0.5, 0.9, 0.95, 1))
+quantile(storm_data$FATALITIES, probs = c(0, 0.5, 0.9, 0.95, 1))
+plotyears <- seq(min(as.integer(health_year$BGN_DATE_YEAR)), 
+                 max(as.integer(health_year$BGN_DATE_YEAR)), by = 5)
+q1 <- qplot(x = as.integer(BGN_DATE_YEAR), y = total_FATALITIES, 
+            data = health_year) + 
+        scale_x_continuous(breaks = plotyears) + 
         theme(axis.text.x = element_text(angle = 90))
-qplot(x = BGN_DATE_YEAR, y = total_INJURIES, data = health_year) + 
+q2 <- qplot(x = as.integer(BGN_DATE_YEAR), y = total_INJURIES, 
+            data = health_year) + 
+        scale_x_continuous(breaks = plotyears) + 
         theme(axis.text.x = element_text(angle = 90))
+grid.arrange(q1, q2, ncol = 2)
 ```
 
-It seems like data collection got a lot better around 1995, so we will look only
-at events in 1995 or later.
+It seems like data collection got a lot better around 1993, so we will look only
+at events in 1993 or later.
 
-```{r, cache=TRUE}
-year_cutoff = "1995"
-health_storm_data <- subset(health_storm_data, BGN_DATE_YEAR >= year_cutoff)
-
-health_type <- ddply(storm_data, .(EVTYPE), summarize, 
+```{r}
+year_cutoff = "1993"
+storm_data_subset <- subset(storm_data, BGN_DATE_YEAR >= year_cutoff)
+sum_subset_EVTYPE <- count(storm_data_subset$EVTYPE)
+sum_subset_EVTYPE <- sum_subset_EVTYPE[order(-sum_subset_EVTYPE$freq),]
+nevents <- sum(sum_subset_EVTYPE$freq)
+total_injuries <- sum(storm_data_subset$INJURIES)
+total_fatalities <- sum(storm_data_subset$FATALITIES)
+health_type <- ddply(storm_data_subset, .(EVTYPE), summarize, 
                      mean_INJURIES = mean(INJURIES), 
                      total_INJURIES = sum(INJURIES), 
+                     proportion_INJURIES = sum(INJURIES) / total_injuries, 
                      mean_FATALITIES = mean(FATALITIES), 
-                     total_FATALITIES = sum(FATALITIES))
+                     total_FATALITIES = sum(FATALITIES), 
+                     proportion_FATALITIES = sum(FATALITIES) / 
+                             total_fatalities)
 ```
 
 For planning purposes, both the frequency and likelihood of injuries or 
 fatalities from an event would be of interest.
 
 ```{r}
-top_injuries <- as.character(health_type[with(health_type, 
-                                 order(-total_INJURIES)), ]$EVTYPE[1:10])
-mean_injuries <- as.character(health_type[with(health_type, 
-                                 order(-mean_INJURIES)), ]$EVTYPE[1:10])
-top_fatalities <- as.character(health_type[with(health_type, 
-                                 order(-total_FATALITIES)), ]$EVTYPE[1:10])
-mean_fatalities <- as.character(health_type[with(health_type, 
-                                 order(-mean_FATALITIES)), ]$EVTYPE[1:10])
-```
-
-The ten most-frequent causes of injuries and fatalities in 1995-2011 were:
-```{r}
-print(cbind(rank = seq(1:10), injuries = top_injuries, 
-            fatalities = top_fatalities))
-```
-
-The ten types of events most likely to cause injury or fatality in the same 
-time period were:
-```{r}
-print(cbind(rank = seq(1:10), injuries = mean_injuries, 
-            fatalities = mean_fatalities))
+top_injuries <- as.character(health_type[with(
+        health_type, order(-total_INJURIES)), ]$EVTYPE[1:10])
+mean_injuries <- as.character(health_type[with(
+        health_type, order(-mean_INJURIES)), ]$EVTYPE[1:10])
+top_fatalities <- as.character(health_type[with(
+        health_type, order(-total_FATALITIES)), ]$EVTYPE[1:10])
+mean_fatalities <- as.character(health_type[with(
+        health_type, order(-mean_FATALITIES)), ]$EVTYPE[1:10])
 ```
 
 
@@ -166,36 +196,42 @@ print(cbind(rank = seq(1:10), injuries = mean_injuries,
 
 The meaning of the other "EXP" column values is unclear and is not documented. A quick inspection of those events shows that they are mostly minor. The economic impact of those events will be ignored.
 
-```{r, cache=TRUE}
-storm_data$property_damage <- rep(NA, nrow(storm_data))
-storm_data$crop_damage <- rep(NA, nrow(storm_data))
+```{r}
+storm_data_subset$property_damage <- rep(NA, nrow(storm_data_subset))
+storm_data_subset$crop_damage <- rep(NA, nrow(storm_data_subset))
 
-storm_data_prop_K <- storm_data$PROPDMGEXP == "K" | storm_data$PROPDMGEXP == "k"
-storm_data_prop_M <- storm_data$PROPDMGEXP == "M" | storm_data$PROPDMGEXP == "m"
-storm_data_prop_B <- storm_data$PROPDMGEXP == "B" | storm_data$PROPDMGEXP == "b"
-
-
-storm_data[storm_data_prop_K, ]$property_damage <- 
-        storm_data[storm_data_prop_K, ]$PROPDMG * 10^3
-storm_data[storm_data_prop_M, ]$property_damage <- 
-        storm_data[storm_data_prop_M, ]$PROPDMG * 10^6
-storm_data[storm_data_prop_B, ]$property_damage <- 
-        storm_data[storm_data_prop_B, ]$PROPDMG * 10^9
+storm_data_prop_K <- storm_data_subset$PROPDMGEXP == "K" | 
+        storm_data_subset$PROPDMGEXP == "k"
+storm_data_prop_M <- storm_data_subset$PROPDMGEXP == "M" | 
+        storm_data_subset$PROPDMGEXP == "m"
+storm_data_prop_B <- storm_data_subset$PROPDMGEXP == "B" | 
+        storm_data_subset$PROPDMGEXP == "b"
 
 
-storm_data_crop_K <- storm_data$CROPDMGEXP == "K" | storm_data$CROPDMGEXP == "k"
-storm_data_crop_M <- storm_data$CROPDMGEXP == "M" | storm_data$CROPDMGEXP == "m"
-storm_data_crop_B <- storm_data$CROPDMGEXP == "B" | storm_data$CROPDMGEXP == "b"
+storm_data_subset[storm_data_prop_K, ]$property_damage <- 
+        storm_data_subset[storm_data_prop_K, ]$PROPDMG * 10^3
+storm_data_subset[storm_data_prop_M, ]$property_damage <- 
+        storm_data_subset[storm_data_prop_M, ]$PROPDMG * 10^6
+storm_data_subset[storm_data_prop_B, ]$property_damage <- 
+        storm_data_subset[storm_data_prop_B, ]$PROPDMG * 10^9
 
 
-storm_data[storm_data_crop_K, ]$crop_damage <- 
-        storm_data[storm_data_crop_K, ]$CROPDMG * 10^3
-storm_data[storm_data_crop_M, ]$crop_damage <- 
-        storm_data[storm_data_crop_M, ]$CROPDMG * 10^6
-storm_data[storm_data_crop_B, ]$crop_damage <- 
-        storm_data[storm_data_crop_B, ]$CROPDMG * 10^9
+storm_data_crop_K <- storm_data_subset$CROPDMGEXP == "K" | 
+        storm_data_subset$CROPDMGEXP == "k"
+storm_data_crop_M <- storm_data_subset$CROPDMGEXP == "M" | 
+        storm_data_subset$CROPDMGEXP == "m"
+storm_data_crop_B <- storm_data_subset$CROPDMGEXP == "B" | 
+        storm_data_subset$CROPDMGEXP == "b"
 
-econ_storm_data <- subset(storm_data, 
+
+storm_data_subset[storm_data_crop_K, ]$crop_damage <- 
+        storm_data_subset[storm_data_crop_K, ]$CROPDMG * 10^3
+storm_data_subset[storm_data_crop_M, ]$crop_damage <- 
+        storm_data_subset[storm_data_crop_M, ]$CROPDMG * 10^6
+storm_data_subset[storm_data_crop_B, ]$crop_damage <- 
+        storm_data_subset[storm_data_crop_B, ]$CROPDMG * 10^9
+
+econ_storm_data <- subset(storm_data_subset, 
                           !is.na(property_damage) | !is.na(crop_damage))
 
 ```
@@ -209,12 +245,12 @@ summary(econ_storm_data$crop_damage)
 
 Similar to the health data, we summarize by event type and year.
 
-```{r, cache=TRUE}
+```{r}
 econ_year <- ddply(econ_storm_data, .(BGN_DATE_YEAR), summarize, 
-                     mean_property_damage = mean(property_damage, na.rm = TRUE), 
-                     total_property_damage = sum(property_damage, na.rm = TRUE), 
-                     mean_crop_damage = mean(crop_damage, na.rm = TRUE), 
-                     total_crop_damage = sum(crop_damage, na.rm = TRUE))
+                   mean_property_damage = mean(property_damage, na.rm = TRUE), 
+                   total_property_damage = sum(property_damage, na.rm = TRUE), 
+                   mean_crop_damage = mean(crop_damage, na.rm = TRUE), 
+                   total_crop_damage = sum(crop_damage, na.rm = TRUE))
 ```
 
 
@@ -223,36 +259,57 @@ quantile(econ_storm_data$property_damage, probs = c(0, 0.5, 0.9, 0.95, 1),
          na.rm = TRUE)
 quantile(econ_storm_data$crop_damage, probs = c(0, 0.5, 0.9, 0.95, 1), 
          na.rm = TRUE)
-qplot(x = BGN_DATE_YEAR, y = total_property_damage, data = econ_year) + 
+plotyears <- seq(min(as.integer(econ_year$BGN_DATE_YEAR)), 
+                 max(as.integer(econ_year$BGN_DATE_YEAR)), by = 5)
+q1 <- qplot(x = as.integer(BGN_DATE_YEAR), y = total_property_damage, 
+            data = econ_year) + 
+        scale_x_continuous(breaks = plotyears) +
         theme(axis.text.x = element_text(angle = 90))
-qplot(x = BGN_DATE_YEAR, y = total_crop_damage, data = econ_year) + 
+q2 <- qplot(x = as.integer(BGN_DATE_YEAR), y = total_crop_damage, 
+            data = econ_year) + 
+        scale_x_continuous(breaks = plotyears) + 
         theme(axis.text.x = element_text(angle = 90))
+grid.arrange(q1, q2, ncol = 2)
 ```
 
-It looks like good data collection on economic damage started in 1993, so we will look at only data 1993-2011. We will also summarize the data since then by event type.
+The 1993-2011 data look to be complete. We summarize the data during that time by event type.
+
 
 ```{r}
-econ_year_cutoff <- "1993"
-econ_storm_data <- subset(econ_storm_data, BGN_DATE_YEAR >= econ_year_cutoff)
+econ_storm_data <- subset(econ_storm_data, BGN_DATE_YEAR >= year_cutoff)
 
 econ_type <- ddply(econ_storm_data, .(EVTYPE), summarize, 
-                     total_property_damage = sum(property_damage, na.rm = TRUE), 
-                     total_crop_damage = sum(crop_damage, na.rm = TRUE))
+                   total_property_damage = sum(property_damage, na.rm = TRUE), 
+                   total_crop_damage = sum(crop_damage, na.rm = TRUE))
 ```
 
 For the economics data, total property and crop damages are the most useful.
 
 ```{r}
-top_property <- as.character(econ_type[with(econ_type, 
-                                 order(-total_property_damage)), ]$EVTYPE[1:10])
-top_crop <- as.character(econ_type[with(econ_type, 
-                                 order(-total_crop_damage)), ]$EVTYPE[1:10])
+top_property <- as.character(econ_type[with(econ_type, order(
+        -total_property_damage)),]$EVTYPE[1:10])
+top_crop <- as.character(econ_type[with(econ_type, order(
+        -total_crop_damage)), ]$EVTYPE[1:10])
+```
+
+# Results
+
+The ten most-frequent causes of injuries and fatalities in 1995-2011 were:
+```{r, results='asis'}
+kable(cbind(rank = seq(1:10), injuries = top_injuries, 
+            fatalities = top_fatalities))
+```
+
+The ten types of events most likely to cause injury or fatality in the same 
+time period were:
+```{r, results='asis'}
+kable(cbind(rank = seq(1:10), injuries = mean_injuries, 
+            fatalities = mean_fatalities))
 ```
 
 The top causes (by total cost) of property and crop damage in 1993-2011 were:
-```{r}
-print(cbind(rank = seq(1:10), property = top_property, 
+```{r, results='asis'}
+kable(cbind(rank = seq(1:10), property = top_property, 
             crop = top_crop))
 ```
 
-# Conclusions
